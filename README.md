@@ -1,7 +1,7 @@
 # Florian
 Praktikum vom 18.05.2026-29.05.2026
 
-###Informationen zum Praktikmsbetrieb:
+##Informationen zum Praktikmsbetrieb:
 - ... Mitarbeiter
 - in Dresden Würzburger Straße 58
 - Praktikumsbetreuer sind Herr Fichtmüller + Herr Herrmann
