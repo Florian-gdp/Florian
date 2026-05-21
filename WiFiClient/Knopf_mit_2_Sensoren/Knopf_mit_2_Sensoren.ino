@@ -8,9 +8,8 @@ struct TeamSensor {
   bool letzterZustand = HIGH;
 
   unsigned long startZeit = 0;
+
 };
-
-
 
 TeamSensor gelb = {4};
 TeamSensor rot  = {5};
@@ -22,7 +21,7 @@ const int startButton = 2;
 const int MAXTORE = 6;
 
 const unsigned long minBlockZeit = 80;
-const unsigned long maxBlockZeit = 700;
+const unsigned long maxBlockZeit = 1000;
 
 
 const unsigned long torPause = 5000;
@@ -57,7 +56,7 @@ void resetSpiel() {
 
 
 void pruefeSensor(TeamSensor &team,
-                  const char* name) {
+ const char* name) {
 
   unsigned long jetzt = millis();
 
