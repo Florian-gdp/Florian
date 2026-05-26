@@ -406,6 +406,8 @@ void connectWiFi() {
 
   ThingSpeak.begin(client);
 
+  doSophosLogin();
+
   Serial.println("ThingSpeak bereit");
 }
 
