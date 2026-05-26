@@ -32,8 +32,8 @@ const int MAXTORE = 6;
 const int rotPin = D1;
 const int gelbPin = D2;
 const int startButton = D4;
-const int ledRedPin = 12
-const int ledYellowPin = 13
+const int ledRedPin = 12;
+const int ledYellowPin = 13;
 
 // ================= BLOCKZEIT SENSOR =================
 const unsigned long minBlockZeit = 20;
@@ -403,12 +403,14 @@ void connectWiFi() {
 
   Serial.println();
   Serial.println("WLAN verbunden");
-
+  delay(50);
   ThingSpeak.begin(client);
-
-  doSophosLogin();
-
   Serial.println("ThingSpeak bereit");
+  delay(50);
+  doSophosLogin();
+  delay(50);
+  Serial.println("Login in Gäste Lan erfolgreich");
+  
 }
 
 // =====================================================
