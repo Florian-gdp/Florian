@@ -79,8 +79,8 @@ void sendeThingSpeak() {
         (erstesTorZeit - spielStartZeit) / 1000;
   }
 
-ThingSpeak.setField(1, (long)spiellaenge);
-ThingSpeak.setField(2, (long)sekundenErstesTor);
+  ThingSpeak.setField(1, spiellaenge);
+  ThingSpeak.setField(2, sekundenErstesTor);
   ThingSpeak.setField(3, gelbTore);
   ThingSpeak.setField(4, rotTore);
   ThingSpeak.setField(5, besteSerie);
