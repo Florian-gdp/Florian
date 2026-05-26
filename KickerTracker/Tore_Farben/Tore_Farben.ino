@@ -1,36 +1,45 @@
 #include <Arduino.h>
 #include <FastLED.h>
+#include <ESP8266WiFi.h>
+#include <ThingSpeak.h>
+#include "secrets.h"
 
 #define NUM_LEDS 6
 
 CRGB leds1[NUM_LEDS];
 CRGB leds2[NUM_LEDS];
 
+WiFiClient client;
 
 enum SpielStatus { START_ANIMATION = 0, SPIELT = 1 };
 SpielStatus status = START_ANIMATION;
 
-
 const int rotPin = D1;
 const int gelbPin = D2;
 const int startButton = D4;
-
 
 int rotTore = 0;
 int gelbTore = 0;
 
 const int MAXTORE = 6;
 
-
 const unsigned long minBlockZeit = 20;
 const unsigned long maxBlockZeit = 300;
 unsigned long torPause = 6000;
 unsigned long letztesTor = 0;
 
-
 unsigned long endZeit = 0;
 bool endAktiv = false;
 
+unsigned long spielStartZeit = 0;
+unsigned long erstesTorZeit = 0;
+bool erstesTorGefallen = false;
+
+String letzteMannschaft = "";
+int aktuelleSerie = 0;
+int besteSerie = 0;
+
+int groessterRueckstandSieg = 0;
 
 struct SensorState {
   int lastState = HIGH;
@@ -41,6 +50,54 @@ struct SensorState {
 SensorState rotState;
 SensorState gelbState;
 
+void connectWiFi() {
+
+  WiFi.begin(SECRET_SSID, SECRET_PASS);
+
+  Serial.print("Verbinde WLAN");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WLAN verbunden");
+
+  ThingSpeak.begin(client);
+}
+
+void sendeThingSpeak() {
+
+  unsigned long spiellaenge =
+      (millis() - spielStartZeit) / 1000;
+
+  unsigned long sekundenErstesTor = 0;
+
+  if (erstesTorGefallen) {
+    sekundenErstesTor =
+        (erstesTorZeit - spielStartZeit) / 1000;
+  }
+
+ThingSpeak.setField(1, (long)spiellaenge);
+ThingSpeak.setField(2, (long)sekundenErstesTor);
+  ThingSpeak.setField(3, gelbTore);
+  ThingSpeak.setField(4, rotTore);
+  ThingSpeak.setField(5, besteSerie);
+  ThingSpeak.setField(6, groessterRueckstandSieg);
+
+  int response =
+      ThingSpeak.writeFields(
+          SECRET_CH_ID,
+          SECRET_WRITE_APIKEY);
+
+  if (response == 200) {
+    Serial.println("ThingSpeak erfolgreich gesendet");
+  } else {
+    Serial.print("ThingSpeak Fehler: ");
+    Serial.println(response);
+  }
+}
 
 void updateLEDs() {
 
@@ -52,12 +109,12 @@ void updateLEDs() {
   FastLED.show();
 }
 
-
 void startAnimation() {
 
   CRGB colors[] = { CRGB::Blue, CRGB::Red, CRGB::Green };
 
   for (int cycle = 0; cycle < 3; cycle++) {
+
     for (int i = 0; i < 3; i++) {
 
       fill_solid(leds1, NUM_LEDS, colors[i]);
@@ -73,7 +130,6 @@ void startAnimation() {
   FastLED.show();
 }
 
-
 void blinkGoal(CRGB* strip, int score, CRGB color) {
 
   unsigned long start = millis();
@@ -83,6 +139,7 @@ void blinkGoal(CRGB* strip, int score, CRGB color) {
     for (int i = 0; i < NUM_LEDS; i++) {
       strip[i] = (i < score) ? color : CRGB::Black;
     }
+
     FastLED.show();
     delay(200);
 
@@ -91,7 +148,6 @@ void blinkGoal(CRGB* strip, int score, CRGB color) {
     delay(200);
   }
 }
-
 
 void winnerBlink(CRGB* strip, CRGB color) {
 
@@ -108,21 +164,29 @@ void winnerBlink(CRGB* strip, CRGB color) {
     delay(300);
   }
 
-
   fill_solid(strip, NUM_LEDS, color);
   FastLED.show();
-
 
   endZeit = millis();
   endAktiv = true;
 }
-
 
 void resetSpiel() {
 
   rotTore = 0;
   gelbTore = 0;
   letztesTor = 0;
+
+  erstesTorGefallen = false;
+  erstesTorZeit = 0;
+
+  letzteMannschaft = "";
+  aktuelleSerie = 0;
+  besteSerie = 0;
+
+  groessterRueckstandSieg = 0;
+
+  spielStartZeit = millis();
 
   rotState = SensorState();
   gelbState = SensorState();
@@ -134,8 +198,31 @@ void resetSpiel() {
   Serial.println("Neues Spiel gestartet");
 }
 
+void updateSerien(const char* team) {
 
-void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
+  if (letzteMannschaft == team) {
+    aktuelleSerie++;
+  } else {
+    aktuelleSerie = 1;
+    letzteMannschaft = team;
+  }
+
+  if (aktuelleSerie > besteSerie) {
+    besteSerie = aktuelleSerie;
+  }
+}
+
+void updateRueckstand() {
+
+  int differenz = abs(rotTore - gelbTore);
+
+  if (differenz > groessterRueckstandSieg) {
+    groessterRueckstandSieg = differenz;
+  }
+}
+
+void checkSensor(int pin, const char* team,
+                 SensorState &s, int &tore) {
 
   int state = digitalRead(pin);
   unsigned long jetzt = millis();
@@ -145,11 +232,15 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
     s.imEvent = true;
   }
 
-  if (s.imEvent && (jetzt - s.startZeit > maxBlockZeit)) {
+  if (s.imEvent &&
+      (jetzt - s.startZeit > maxBlockZeit)) {
+
     s.imEvent = false;
   }
 
-  if (state == HIGH && s.lastState == LOW && s.imEvent) {
+  if (state == HIGH &&
+      s.lastState == LOW &&
+      s.imEvent) {
 
     unsigned long dauer = jetzt - s.startZeit;
 
@@ -159,6 +250,14 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
 
       tore++;
       letztesTor = jetzt;
+
+      if (!erstesTorGefallen) {
+        erstesTorGefallen = true;
+        erstesTorZeit = millis();
+      }
+
+      updateSerien(team);
+      updateRueckstand();
 
       Serial.print("TOR ");
       Serial.print(team);
@@ -175,18 +274,33 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
 
       updateLEDs();
 
-    
-      if (rotTore >= MAXTORE || gelbTore >= MAXTORE) {
+      if (rotTore >= MAXTORE ||
+          gelbTore >= MAXTORE) {
 
         status = START_ANIMATION;
 
         Serial.println("SPIEL ENDE");
 
+        sendeThingSpeak();
+
         if (rotTore >= gelbTore) {
+
           Serial.println("GEWINNER: ROT");
+
+          if (gelbTore > rotTore) {
+            updateRueckstand();
+          }
+
           winnerBlink(leds1, CRGB::Red);
+
         } else {
+
           Serial.println("GEWINNER: GELB");
+
+          if (rotTore > gelbTore) {
+            updateRueckstand();
+          }
+
           winnerBlink(leds2, CRGB::Yellow);
         }
       }
@@ -198,9 +312,11 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
   s.lastState = state;
 }
 
-
 void setup() {
+
   Serial.begin(115200);
+
+  connectWiFi();
 
   pinMode(rotPin, INPUT_PULLUP);
   pinMode(gelbPin, INPUT_PULLUP);
@@ -208,14 +324,13 @@ void setup() {
 
   FastLED.addLeds<WS2812B, 12, GRB>(leds1, NUM_LEDS);
   FastLED.addLeds<WS2812B, 13, GRB>(leds2, NUM_LEDS);
+
   FastLED.setBrightness(80);
 
   updateLEDs();
 }
 
-
 void loop() {
-
 
   if (endAktiv) {
 
@@ -223,6 +338,7 @@ void loop() {
 
       fill_solid(leds1, NUM_LEDS, CRGB::Black);
       fill_solid(leds2, NUM_LEDS, CRGB::Black);
+
       FastLED.show();
 
       endAktiv = false;
@@ -234,27 +350,28 @@ void loop() {
     return;
   }
 
-
   if (status == START_ANIMATION) {
 
     if (digitalRead(startButton) == LOW) {
+
       delay(50);
 
       if (digitalRead(startButton) == LOW) {
 
         resetSpiel();
+
         status = SPIELT;
 
         Serial.println("SPIEL STARTET");
 
         startAnimation();
+
         updateLEDs();
       }
     }
 
     return;
   }
-
 
   checkSensor(rotPin, "ROT", rotState, rotTore);
   checkSensor(gelbPin, "GELB", gelbState, gelbTore);
