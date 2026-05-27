@@ -285,6 +285,7 @@ void updateRueckstand() {
     rueckstand = 0;
   }
 
+
   // Größten Rückstand merken
   if (rueckstand > maxRueckstand) {
     maxRueckstand = rueckstand;
