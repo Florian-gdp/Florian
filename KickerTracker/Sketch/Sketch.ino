@@ -40,7 +40,7 @@ const int ledRedPin = 12;
 const int ledYellowPin = 13;
 
 // ================= BLOCKZEIT SENSOR =================
-const unsigned long minBlockZeit = 10;
+const unsigned long minBlockZeit = 20;
 const unsigned long maxBlockZeit = 400;
 
 // ================= BLOCKZEIT TORE =================
@@ -61,9 +61,8 @@ int maxRueckstand = 0;
 // ================= SENSOR =================
 struct SensorState {
   int lastState = HIGH;
-  unsigned long changeTime = 0;
+  unsigned long lowStart = 0;
 };
-
 SensorState rotState;
 SensorState gelbState;
 
@@ -300,26 +299,7 @@ void updateRueckstand() {
 // BLOCKZEIT
 // =====================================================
 
-bool isStableSignal(int pin, SensorState &s, int minTime, int maxTime) {
 
-  int state = digitalRead(pin);
-  unsigned long now = millis();
-
-  if (state != s.lastState) {
-    s.changeTime = now;
-  }
-
-  unsigned long stableTime =
-      now - s.changeTime;
-
-  if (stableTime < minTime)
-    return false;
-
-  if (stableTime > maxTime)
-    return false;
-
-  return true;
-}
 
 
 // =====================================================
@@ -346,26 +326,38 @@ void clearAllLeds() {
 void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
 
   int state = digitalRead(pin);
-
   unsigned long now = millis();
 
-  bool stable = isStableSignal(pin, s,  minBlockZeit, maxBlockZeit);
+  // START BLOCKIERUNG
+  if (s.lastState == HIGH && state == LOW) {
+    s.lowStart = now;
+  }
 
-  // FALLENDE FLANKE
-  if (s.lastState == HIGH && state == LOW && stable) {
+  // ENDE BLOCKIERUNG
+  if (s.lastState == LOW && state == HIGH) {
 
-    if (now - letztesTor > torPause) {
+    unsigned long blockZeit = now - s.lowStart;
+
+
+
+    // Prüfen ob gültige Dauer
+    if (blockZeit >= minBlockZeit &&
+        blockZeit <= maxBlockZeit &&
+        now - letztesTor > torPause) {
 
       tore++;
-      torZeiten[torIndex] = String(team) + " - " + getCurrentTime();
+
+      torZeiten[torIndex] =
+          String(team) + " - " + getCurrentTime();
+
       torIndex++;
-    
+
       letztesTor = now;
 
       // ERSTES TOR
       if (!erstesTorGefallen) {
         erstesTorGefallen = true;
-        erstesTorZeit = millis();
+        erstesTorZeit = now;
       }
 
       updateSerie(team);
@@ -392,13 +384,15 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
         Serial.println("ROT HAT GEWONNEN!");
         sendToThingSpeak();
         winnerBlinkEnd(CRGB::Red, true);
-      } else if (gelbTore >= MAXTORE) {
+      }
+      else if (gelbTore >= MAXTORE) {
         Serial.println("GELB HAT GEWONNEN!");
         sendToThingSpeak();
         winnerBlinkEnd(CRGB::Yellow, false);
       }
     }
   }
+
   s.lastState = state;
 }
 
