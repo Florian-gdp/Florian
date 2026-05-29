@@ -5,13 +5,16 @@
 #include "secrets.h"
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecureBearSSL.h>
+#include <time.h>
 #define NUM_LEDS 6
 
 
 // ================= WIFI ====================
 WiFiClient client;
 const char* sophosLoginUrl ="https://10.10.75.1:4502/index.cgi?action=login";
-
+const char* ntpServer = "de.pool.ntp.org";
+const long  gmtOffset_sec = 3600;
+const int   daylightOffset_sec = 3600;
 
 // ================= FASTLED =================
 CRGB ledsRed[NUM_LEDS];
@@ -27,7 +30,8 @@ SpielStatus status = START;
 int rotTore = 0;
 int gelbTore = 0;
 const int MAXTORE = 6;
-
+String torZeiten[20];
+int torIndex = 0;
 // ================= PINS =================
 const int rotPin = D1;
 const int gelbPin = D2;
@@ -36,8 +40,8 @@ const int ledRedPin = 12;
 const int ledYellowPin = 13;
 
 // ================= BLOCKZEIT SENSOR =================
-const unsigned long minBlockZeit = 20;
-const unsigned long maxBlockZeit = 300;
+const unsigned long minBlockZeit = 10;
+const unsigned long maxBlockZeit = 400;
 
 // ================= BLOCKZEIT TORE =================
 unsigned long torPause = 6000;
@@ -114,6 +118,7 @@ void loop() {
         besteSerie = 0;
         letzteMannschaft = "";
         maxRueckstand = 0;
+        torIndex = 0;
         clearAllLeds();
         delay(50);
 
@@ -285,7 +290,6 @@ void updateRueckstand() {
     rueckstand = 0;
   }
 
-
   // Größten Rückstand merken
   if (rueckstand > maxRueckstand) {
     maxRueckstand = rueckstand;
@@ -335,6 +339,10 @@ void clearAllLeds() {
 // SENSOR
 // =====================================================
 
+// =====================================================
+// SENSOR
+// =====================================================
+
 void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
 
   int state = digitalRead(pin);
@@ -349,6 +357,9 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
     if (now - letztesTor > torPause) {
 
       tore++;
+      torZeiten[torIndex] = String(team) + " - " + getCurrentTime();
+      torIndex++;
+    
       letztesTor = now;
 
       // ERSTES TOR
@@ -377,19 +388,14 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
       updateLEDs();
 
       // SPIEL ENDE
-      if (rotTore >= MAXTORE || gelbTore >= MAXTORE) {
-
-        Serial.println("SPIEL ENDE");
+      if (rotTore >= MAXTORE) {
+        Serial.println("ROT HAT GEWONNEN!");
         sendToThingSpeak();
-
-        if (rotTore > gelbTore) {
-          Serial.println("GEWINNER: ROT");
-          winnerBlinkEnd(CRGB::Red, true);
-
-        } else {
-          Serial.println("GEWINNER: GELB");
-          winnerBlinkEnd(CRGB::Yellow, false);
-        }
+        winnerBlinkEnd(CRGB::Red, true);
+      } else if (gelbTore >= MAXTORE) {
+        Serial.println("GELB HAT GEWONNEN!");
+        sendToThingSpeak();
+        winnerBlinkEnd(CRGB::Yellow, false);
       }
     }
   }
@@ -397,13 +403,10 @@ void checkSensor(int pin, const char* team, SensorState &s, int &tore) {
 }
 
 // =====================================================
-// WLAN
+// WIFI VERBINDUNG
 // =====================================================
-
 void connectWiFi() {
-
-  Serial.print("Verbinde WLAN");
-
+  Serial.println("Verbinde mit WLAN...");
   WiFi.begin(SECRET_SSID, SECRET_PASS);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -414,51 +417,82 @@ void connectWiFi() {
   Serial.println();
   Serial.println("WLAN verbunden");
   delay(50);
+  
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  
   ThingSpeak.begin(client);
   Serial.println("ThingSpeak bereit");
   delay(50);
   doSophosLogin();
   delay(50);
   Serial.println("Login in Gäste Lan erfolgreich");
-  
 }
 
 // =====================================================
-// THINGSPEAK SENDEN
+// ZEITSTEMPEL
 // =====================================================
-
-void sendToThingSpeak() {
-
-  unsigned long spielLaenge = (millis() - spielStartZeit) / 1000;
-  unsigned long sekBisErstesTor = 0;
-
-  if (erstesTorGefallen) {
-    sekBisErstesTor = (erstesTorZeit - spielStartZeit) / 1000;
+String getCurrentTime() {
+  time_t now = time(nullptr);
+  struct tm* timeinfo = localtime(&now);
+  if (now < 86400) {
+    return "Keine NTP-Zeit";
   }
+  char buf[20]; // Puffergröße definiert, damit Uhrzeit & Datum reinpassen
+  strftime(buf, sizeof(buf), "%d.%m.%Y %H:%M:%S", timeinfo);
+  return String(buf);
+}
 
-  ThingSpeak.setField(1, (long)spielLaenge);
-  ThingSpeak.setField(2, (long)sekBisErstesTor);
+// =====================================================
+// THINGSPEAK DATA TRANSFER
+// =====================================================
+void sendToThingSpeak() {
+  // 1. Erst im Gäste-LAN einloggen
+  doSophosLogin(); 
+  delay(100);
+
+  // BERICHTIGUNG: Alten Socket-Müll vom Sophos-Login zwingend schließen!
+  client.stop(); 
+  delay(100);
+
+  Serial.println("Sende Daten an ThingSpeak...");
+
+unsigned long spielDauerSek =
+    (millis() - spielStartZeit) / 1000;
+
+unsigned long erstesTorSek =
+    erstesTorGefallen
+    ? (erstesTorZeit - spielStartZeit) / 1000
+    : 0;
+
+ThingSpeak.setField(1, (long)spielDauerSek);
+ThingSpeak.setField(2, (long)erstesTorSek);
   ThingSpeak.setField(3, gelbTore);
   ThingSpeak.setField(4, rotTore);
   ThingSpeak.setField(5, besteSerie);
   ThingSpeak.setField(6, maxRueckstand);
+  // torZeiten von array in string wandeln
+  
+  String torZeitenString = "";
+  for(int i = 0; i<11; i++) {
+    torZeitenString += torZeiten[i] + ",";
+  }
+  ThingSpeak.setField(7, torZeitenString);
 
-  int response = ThingSpeak.writeFields( SECRET_CH_ID, SECRET_WRITE_APIKEY);
+  // 2. Daten mit frischer Verbindung senden
+  int x = ThingSpeak.writeFields(SECRET_CH_ID, SECRET_WRITE_APIKEY);
 
-  if (response == 200) {
-    Serial.println("ThingSpeak erfolgreich gesendet");
+  if (x == 200) {
+    Serial.println("ThingSpeak Update erfolgreich! (Code 200)");
   } else {
-    Serial.print("ThingSpeak Fehler: ");
-    Serial.println(response);
+    Serial.print("Fehler beim ThingSpeak Update. HTTP-Fehlercode: ");
+    Serial.println(x);
   }
 }
 
 // =====================================================
-// GÄSTE LAN LOGIN
+// SOPHOS captive portal login
 // =====================================================
-
 void doSophosLogin() {
-
   std::unique_ptr<BearSSL::WiFiClientSecure> secureClient(new BearSSL::WiFiClientSecure);
   secureClient->setInsecure();
 
